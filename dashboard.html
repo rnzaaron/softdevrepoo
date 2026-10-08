@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard</title></head>
+<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead" id="welcome"></p><div id="box"></div></main>
+<script src="common.js"></script><script>
+// The API scopes records by the signed-in role, so each dashboard only displays permitted data.
+init('Dashboard');
+const card = (value, label) => `<section class="card"><div class="metric">${esc(value)}</div><div class="muted">${esc(label)}</div></section>`;
+const empty = message => `<p class="empty">${esc(message)}</p>`;
+(async () => {
+  try {
+    const data = await api('stats');
+    document.getElementById('welcome').textContent = `Welcome, ${user.name}. ${user.section || 'St. Catherine College of Valenzuela City'}`;
+    const totals = user.role === 'admin' ? card(data.students, 'Students') + card(data.teachers, 'Teachers') + card(data.sections, 'Sections') : '';
+    const submissions = ['admin', 'adviser', 'teacher'].includes(user.role)
+      ? `<section class="card"><div class="toolbar"><h3>Grade submissions</h3><a href="grades.html">Open grades</a></div>${data.uploads.length ? `<table><thead><tr><th>Subject</th><th>Section</th><th>Period</th><th>Teacher</th><th>Status</th></tr></thead><tbody>${data.uploads.slice(0, 6).map(item => `<tr><td>${esc(item.subject)}</td><td>${esc(item.section)}</td><td>${esc(item.period)}</td><td>${esc(item.teacherName)}</td><td>${badge(item.status)}</td></tr>`).join('')}</tbody></table>` : empty('No grade submissions yet.')}</section>` : '';
+    const grades = ['student', 'parent'].includes(user.role) ? `<section class="card"><div class="toolbar"><h3>${user.role === 'parent' ? 'Child’s latest grades' : 'Latest grades'}</h3><a href="grades.html">View all</a></div>${data.grades.length ? `<table><thead><tr><th>Subject</th><th>Period</th><th>Grade</th><th>Status</th></tr></thead><tbody>${data.grades.map(item => `<tr><td>${esc(item.subject)}</td><td>${esc(item.period)}</td><td>${esc(item.final)}</td><td>${badge(item.status)}</td></tr>`).join('')}</tbody></table>` : empty('Finalized grades will appear here.')}</section>` : '';
+    const schedule = `<section class="card"><div class="toolbar"><h3>${['student', 'parent'].includes(user.role) ? 'Section schedule' : 'Upcoming classes'}</h3><a href="schedule.html">Open schedule</a></div>${data.schedules.length ? `<table><thead><tr><th>Day</th><th>Time</th><th>Subject</th><th>Section</th><th>Teacher</th></tr></thead><tbody>${data.schedules.map(item => `<tr><td>${esc(item.day)}</td><td>${esc(item.start)}–${esc(item.end)}</td><td>${esc(item.subject)}</td><td>${esc(item.section)}</td><td>${esc(item.substituteName || item.teacherName || item.teacherEmail)}${item.substituteEmail ? ` · substitute: ${esc(item.substituteName || item.substituteEmail)}` : ''}</td></tr>`).join('')}</tbody></table>` : empty('No scheduled classes yet.')}</section>`;
+    const announcements = `<section class="card"><div class="toolbar"><h3>Announcements</h3><a href="announcements.html">View all</a></div>${data.announcements.length ? data.announcements.map(item => `<article><b>${esc(item.title)}</b><p>${esc(item.content)}</p><small class="muted">${esc(item.author)} · ${new Date(item.at).toLocaleDateString()}</small></article>`).join('<hr>') : empty('No announcements for your account.')}</section>`;
+    const notes = `<section class="card"><h3>Notifications</h3>${data.notes.length ? data.notes.map(item => `<p>${esc(item.message)} <small class="muted">${new Date(item.at).toLocaleString()}</small></p>`).join('') : empty('You are up to date.')}</section>`;
+    const pending = user.role === 'adviser' ? `<section class="card"><h3>Pending professors / teacher status</h3>${data.pendingProfessors.length ? `<table><thead><tr><th>Teacher</th><th>Subject</th><th>Period</th><th>Status</th></tr></thead><tbody>${data.pendingProfessors.map(item => `<tr><td>${esc(item.teacherName)}</td><td>${esc(item.subject)}</td><td>${esc(item.period)}</td><td>${badge(item.status)}</td></tr>`).join('')}</tbody></table>` : empty('No pending submissions.')}</section>` : '';
+    document.getElementById('box').innerHTML = `<div class="cards">${totals}${card(data.uploads.filter(item => ['Pending Review', 'Resubmitted'].includes(item.status)).length, 'Pending review')}${card(data.uploads.filter(item => item.status === 'Finalized').length, 'Finalized submissions')}</div>${pending}${grades}${submissions}${schedule}${announcements}${notes}`;
+  } catch (error) { document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
+})();
+</script></body></html>

@@ -4,11 +4,21 @@ A local, multi-page academic management MVP for St. Catherine College of Valenzu
 
 ## Run locally
 
-1. Install Node.js 18+ and MongoDB Community Server. Start the local MongoDB service.
-2. In this folder, run `npm install`.
-3. Run `npm start` and open `http://localhost:3000`.
+Each person needs their own local copy of the project, Node.js 18 or newer, and MongoDB Community Server. The project files are shared; each person's database and `.env` settings stay on their own computer.
 
-The default MongoDB URL is `mongodb://127.0.0.1:27017` and the database is `st_catherine_academic`. Set `MONGODB_URI`, `MONGODB_DB`, or `PORT` before starting to override them. The server prints a connection error and does not start if MongoDB is unavailable.
+### First-time setup on Windows
+
+1. Get access to the GitHub repository. If it is private, the repository owner must invite your GitHub account as a collaborator. Alternatively, download and extract a ZIP of the repository.
+2. Install Node.js 18+ and MongoDB Community Server. Start the MongoDB service on your computer.
+3. Open PowerShell or the VS Code terminal in the project folder and run `npm install`. This reads `package.json` and downloads the packages into `node_modules/`.
+4. Make a local `.env` file by copying `.env.example` to `.env`. For example, in PowerShell run `Copy-Item .env.example .env`. The example connects to MongoDB on this same computer at `127.0.0.1:27017`. If MongoDB is hosted elsewhere, replace `MONGODB_URI` in `.env` with a connection string your groupmate is authorized to use.
+5. Run `npm start` and open `http://localhost:3000` in a browser. Keep the terminal open while using the site; press `Ctrl+C` there to stop the server.
+
+For later runs, start MongoDB and run `npm start` again. Use `npm run dev` instead during development if automatic server restarts are helpful.
+
+The example MongoDB URL is `mongodb://127.0.0.1:27017/sccv_academic_system`. The application uses the database name in `MONGODB_URI`, unless `MONGODB_DB` is explicitly set; if neither specifies a database, it keeps the historical `st_catherine_academic` default. Set `MONGODB_URI`, `MONGODB_DB`, or `PORT` before starting to override the corresponding setting. The server prints a connection error and does not start if MongoDB is unavailable.
+
+**Do not share your real `.env` file or commit it to Git.** It may contain a database username, password, or other private settings. `.env.example` contains only safe placeholders; `.gitignore` excludes each person's real `.env` and installed `node_modules/`. The first successful start on a fresh local database seeds demo accounts and sample school data.
 
 On an empty database, the first startup seeds sections, students, parent/teacher/admin accounts, subjects, rooms, assignments, a sample announcement, formula configuration, a working weekly schedule, one absent and several present classes, pending/finalized grade samples, and digital report cards. Every demo account uses `pass123`:
 

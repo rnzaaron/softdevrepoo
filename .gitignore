@@ -1,0 +1,10 @@
+# Local settings can contain private database credentials.
+.env
+
+# Installed dependencies are restored with npm install.
+node_modules/
+
+# Local editor and operating-system files.
+.vscode/
+.DS_Store
+Thumbs.db

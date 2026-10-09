@@ -11,7 +11,9 @@ const app = express();
 // `const` means these references are set once; `process.env` reads settings supplied at startup.
 const PORT = Number(process.env.PORT || 3000);
 const MONGO_URL = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
-const DB_NAME = process.env.MONGODB_DB || 'st_catherine_academic';
+// Prefer an explicit database override, otherwise honor the database in the URI.
+// Keep the historical default only when the local URI has no database path.
+const DB_NAME = process.env.MONGODB_DB || decodeURIComponent(new URL(MONGO_URL).pathname.slice(1)) || 'st_catherine_academic';
 const sessions = new Map();
 let db;
 
@@ -466,6 +468,6 @@ MongoClient.connect(MONGO_URL).then(async client => {
   await seed();
   app.listen(PORT, () => console.log(`St. Catherine Academic System: http://localhost:${PORT}`));
 }).catch(error => {
-  console.error(`MongoDB connection failed at ${MONGO_URL}: ${error.message}`);
+  console.error(`MongoDB connection failed for database "${DB_NAME}": ${error.message}`);
   process.exitCode = 1;
 });

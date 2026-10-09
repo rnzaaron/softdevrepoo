@@ -1,0 +1,31 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Announcements</title></head>
+<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead">School news and academic notices for your account.</p><div id="box"></div></main>
+<script src="common.js"></script><script>
+// The API applies audience rules at read time for every role.
+init('Announcements');
+async function load() {
+  try {
+    const announcements = await api('announcements');
+    const canPost = ['admin', 'adviser', 'teacher'].includes(user.role);
+    const form = canPost ? `<section class="card"><h2>Post an announcement</h2><label class="field">Title<input id="titleInput" required placeholder="Announcement title"></label><label class="field">Audience<select id="targetType" onchange="toggleAudience()"><option value="all">Entire school</option><option value="role">Role</option><option value="section">Section</option><option value="user">Individual account</option></select></label><span id="audienceDetail"></span><br><label class="field">Message<textarea id="contentInput" rows="4" placeholder="Write the announcement"></textarea></label><br><button onclick="postAnnouncement()">Publish</button><div id="error" class="err"></div></section>` : '';
+    const list = announcements.length ? announcements.map(item => `<article class="card"><div class="toolbar"><h2>${esc(item.title)}</h2>${badge(item.targetType === 'all' ? 'Entire school' : `${item.targetType}: ${item.targetValue}`)}</div><p>${esc(item.content).replaceAll('\n', '<br>')}</p><small class="muted">${esc(item.author)} · ${new Date(item.at).toLocaleString()}</small></article>`).join('') : '<section class="card empty">No announcements are available for your account.</section>';
+    document.getElementById('box').innerHTML = form + list;
+    if (canPost) toggleAudience();
+  } catch (error) { document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
+}
+function toggleAudience() {
+  const type = document.getElementById('targetType').value;
+  const choices = type === 'role' ? `<select id="targetValue"><option value="student">Students</option><option value="parent">Parents</option><option value="teacher">Teachers</option><option value="adviser">Advisers</option><option value="admin">Administrators</option></select>`
+    : type === 'section' ? '<input id="targetValue" placeholder="Grade 10 - St. Catherine">' : type === 'user' ? '<input id="targetValue" type="email" placeholder="user@school.ph">' : '';
+  document.getElementById('audienceDetail').innerHTML = choices;
+}
+async function postAnnouncement() {
+  const targetType = document.getElementById('targetType').value;
+  const targetValue = targetType === 'all' ? '' : document.getElementById('targetValue').value.trim();
+  try {
+    await api('announcements', 'POST', { title: document.getElementById('titleInput').value, content: document.getElementById('contentInput').value, targetType, targetValue });
+    await load();
+  } catch (error) { document.getElementById('error').textContent = error.error || 'Announcement could not be posted.'; }
+}
+load();
+</script><!-- Announcements page: reads notices for this account and lets permitted staff publish them. --></body></html>

@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document requests</title></head>
+<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead">Submit document requests or manage the school's request queue.</p><div id="box"></div></main>
+<script src="common.js"></script><script>
+// Students and parents only receive their own requests; adviser/admin accounts manage the queue.
+init('Document requests');
+async function load() {
+  try {
+    const requests = await api('requests');
+    const canRequest = ['student', 'parent'].includes(user.role);
+    const form = canRequest ? `<section class="card"><h2>Request a document</h2><label class="field">Document<select id="kind"><option>Transcript of Records</option><option>Good Moral Certificate</option><option>Enrollment Certificate</option><option>Other</option></select></label><button onclick="submitRequest()">Submit request</button></section>` : '';
+    const rows = requests.length ? `<section class="card" style="overflow:auto"><table><thead><tr><th>Document</th><th>Requested by</th><th>Student ID</th><th>Requested</th><th>Status</th>${canRequest ? '' : '<th>Update</th>'}</tr></thead><tbody>${requests.map(item => `<tr><td>${esc(item.kind)}</td><td>${esc(item.userName)}</td><td>${esc(item.studentId)}</td><td>${new Date(item.createdAt).toLocaleString()}</td><td>${badge(item.status)}</td>${canRequest ? '' : `<td><select id="status-${item._id}"><option ${item.status === 'Pending' ? 'selected' : ''}>Pending</option><option ${item.status === 'Processing' ? 'selected' : ''}>Processing</option><option ${item.status === 'Ready' ? 'selected' : ''}>Ready</option><option ${item.status === 'Rejected' ? 'selected' : ''}>Rejected</option></select><button onclick="updateRequest('${item._id}')">Save</button></td>`}</tr>`).join('')}</tbody></table></section>` : '<section class="card empty">No document requests found.</section>';
+    document.getElementById('box').innerHTML = form + rows;
+  } catch (error) { document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
+}
+async function submitRequest() {
+  try { await api('requests', 'POST', { kind: document.getElementById('kind').value }); await load(); }
+  catch (error) { alert(error.error || 'Request was not submitted.'); }
+}
+async function updateRequest(id) {
+  try { await api(`requests/${id}`, 'PUT', { status: document.getElementById(`status-${id}`).value }); await load(); }
+  catch (error) { alert(error.error || 'Request was not updated.'); }
+}
+load();
+</script><!-- Requests page: families request documents and staff update their progress. --></body></html>

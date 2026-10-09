@@ -1,19 +1,28 @@
-// Local Express API and static-file server. MongoDB is the only persistence layer.
+// Backend: accepts browser requests, checks permissions, and reads/writes MongoDB.
+// `require` loads installed tools and `dotenv` makes private .env settings available here.
+require('dotenv').config();
+
 const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
+// `const` means these references are set once; `process.env` reads settings supplied at startup.
 const PORT = Number(process.env.PORT || 3000);
 const MONGO_URL = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const DB_NAME = process.env.MONGODB_DB || 'st_catherine_academic';
 const sessions = new Map();
 let db;
 
+// Middleware runs before routes: decode JSON forms, serve the Excel helper and public website.
 app.use(express.json({ limit: '8mb' }));
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'exceljs', 'dist')));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
+// Small helpers keep route handlers consistent: collection selects a MongoDB table,
+// route turns rejected async work into a logged server error, and auth checks the session.
 const collection = name => db.collection(name);
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const sendError = (res, error, status = 400) => res.status(status).json({ error });
@@ -35,7 +44,29 @@ const safeId = id => ObjectId.isValid(id) ? new ObjectId(id) : null;
 const overlap = (a, b) => a.day === b.day && a.start < b.end && b.start < a.end;
 const publicSchedule = row => ({ ...row, _id: String(row._id) });
 
+// A simple connectivity check: save one sample document, then return its result as JSON.
+app.get('/api/test', async (req, res) => {
+  try {
+    const document = { message: 'MongoDB is working!', school: 'St. Catherine College of Valenzuela City' };
+    const result = await collection('tests').insertOne(document);
+
+    res.json({
+      success: true,
+      message: 'Data saved to MongoDB!',
+      data: { _id: result.insertedId, ...document }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // ---------- Authentication and role-scoped data ----------
+// A route maps a browser URL to work on the server. POST changes data; GET reads it.
+// The auth(...) middleware limits who can proceed; async/await waits for MongoDB operations.
 app.post('/api/login', route(async (req, res) => {
   const user = await collection('users').findOne({ email: String(req.body.email || '').toLowerCase(), pw: hash(req.body.password || '') });
   if (!user) return sendError(res, 'Email or password is incorrect.', 401);
@@ -72,6 +103,8 @@ app.get('/api/stats', auth(), route(async (req, res) => {
 }));
 
 // ---------- Grade upload, review, computation, and release ----------
+// Teachers upload spreadsheet rows; the server validates scores and calculates weighted grades.
+// Advisers move each upload through correction, approval, and final release.
 app.post('/api/uploads', auth(['teacher']), route(async (req, res) => {
   const { subject, section, period, rows } = req.body;
   const config = await collection('config').findOne({ _id: 'system' });
@@ -165,6 +198,7 @@ async function getGrades(user) {
 app.get('/api/grades', auth(), route(async (req, res) => res.json(await getGrades(req.user))));
 
 // ---------- Reports and local demo email delivery ----------
+// Finalized grades appear on reports. "Email" is intentionally recorded in MongoDB's demo inbox.
 app.get('/api/reports', auth(), route(async (req, res) => {
   let filter = {};
   if (req.user.role === 'student') filter.studentId = req.user.studentId;
@@ -190,6 +224,8 @@ app.post('/api/reports/:id/email', auth(['admin', 'adviser']), route(async (req,
 app.get('/api/email-records', auth(['admin', 'adviser']), route(async (req, res) => res.json(await collection('email_records').find().sort({ sentAt: -1 }).limit(30).toArray())));
 
 // ---------- Announcements, notifications, and document requests ----------
+// Audience filters make notices personal; request routes let families ask for documents
+// and staff update those requests.
 async function visibleAnnouncements(user) {
   const sections = user.role === 'parent' ? await collection('students').distinct('section', { studentId: { $in: user.children || [] } }) : [user.section].filter(Boolean);
   const query = user.role === 'admin' ? {} : { $or: [
@@ -232,6 +268,8 @@ app.put('/api/requests/:id', auth(['admin', 'adviser']), route(async (req, res) 
 }));
 
 // ---------- Section-scoped schedules and automatic scheduling ----------
+// Schedules are filtered by role. Admin actions check overlaps before adding classes,
+// generating a timetable, or choosing an available substitute.
 async function getSchedules(user) {
   const parentSections = user.role === 'parent' ? await collection('students').distinct('section', { studentId: { $in: user.children || [] } }) : [];
   const filter = user.role === 'teacher' ? { $or: [{ teacherEmail: user.email }, { substituteEmail: user.email }] }
@@ -303,6 +341,7 @@ app.post('/api/substitute', auth(['admin', 'adviser']), route(async (req, res) =
 }));
 
 // ---------- Admin CRUD and grading configuration ----------
+// CRUD means Create, Read, Update, Delete. These shared routes manage allowed school records.
 const ENTITIES = { students: 'students', teachers: 'teachers', sections: 'sections', subjects: 'subjects', rooms: 'rooms', users: 'users', teacher_assignments: 'teacher_assignments' };
 app.get('/api/manage/:entity', auth(['admin']), route(async (req, res) => {
   const name = ENTITIES[req.params.entity];
@@ -360,13 +399,8 @@ app.use('/api', (error, req, res, next) => {
 });
 app.use('/api', (req, res) => sendError(res, `Unknown API endpoint: ${req.method} ${req.path}`, 404));
 
-// Only publish browser pages and the shared client script; never expose server files.
-const browserPages = new Set(['index.html', 'dashboard.html', 'grades.html', 'schedule.html', 'announcements.html', 'admin.html', 'reports.html', 'requests.html']);
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/common.js', (req, res) => res.sendFile(path.join(__dirname, 'common.js')));
-app.get('/:page', (req, res, next) => browserPages.has(req.params.page) ? res.sendFile(path.join(__dirname, req.params.page)) : next());
-
-// Seed realistic local demo accounts and classes the first time MongoDB is empty.
+// Seed sample accounts and school data only when there are no users yet, so an existing
+// database is not filled with duplicate demo records each time the server starts.
 async function seed() {
   if (await collection('users').countDocuments()) return;
   const commonPassword = hash('pass123');
@@ -425,6 +459,8 @@ async function seed() {
   await collection('announcements').insertOne({ title: 'Welcome to the school portal', content: 'The St. Catherine academic portal is ready for the new school year.', targetType: 'all', author: 'School Administrator', at: new Date() });
 }
 
+// Connect first; only after the database is ready do we seed sample data and open the website.
+// `.then(...)` runs after a successful connection; `.catch(...)` reports a connection failure.
 MongoClient.connect(MONGO_URL).then(async client => {
   db = client.db(DB_NAME);
   await seed();

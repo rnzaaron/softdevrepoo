@@ -5,9 +5,8 @@ html body main{background:linear-gradient(135deg,rgba(244,248,244,.96),rgba(228,
 html body main .card{background:rgba(251,253,251,.97);border-color:#c9ddce;box-shadow:0 3px 12px rgba(16,59,45,.12)}
 @media(max-width:760px){html body main{background:rgba(244,248,244,.94)}}
 </style></head>
-<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead">Manage the academic records and rules used throughout the portal.</p><div id="box"></div></main>
+<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead">Manage academic records and rules with automated dropdown inputs and quick navigation.</p><div id="box"></div></main>
 <script src="common.js"></script><script>
-// This screen uses one CRUD form for MongoDB collections and a separate form for academic rules.
 init('Administration');
 const entities = {
   students: [['studentId', 'Student ID'], ['name', 'Student name'], ['email', 'Student email'], ['section', 'Section'], ['parentEmail', 'Parent email']],
@@ -19,39 +18,113 @@ const entities = {
   teacher_assignments: [['subject', 'Subject'], ['section', 'Section'], ['teacherEmail', 'Teacher email'], ['teacherName', 'Teacher name'], ['room', 'Room']]
 };
 let activeEntity = 'students'; let editingId = '';
+let cachedOptions = { sections: [], subjects: [], teachers: [], rooms: [] };
 const box = document.getElementById('box');
+
 async function load() {
   try {
-    const stats = await api('stats');
+    const [stats, options] = await Promise.all([
+      api('stats'),
+      api('options').catch(() => ({ sections: [], subjects: [], teachers: [], rooms: [] }))
+    ]);
+    cachedOptions = options;
+
     box.innerHTML = `<div class="cards">${[['Students', stats.students], ['Teachers', stats.teachers], ['Sections', stats.sections]].map(([label, value]) => `<section class="card"><div class="metric">${value}</div><div class="muted">${label}</div></section>`).join('')}</div>
-      <section class="card"><h2>School records</h2><div class="toolbar"><div>${Object.keys(entities).map(key => `<button class="${activeEntity === key ? '' : 'secondary'}" onclick="selectEntity('${key}')">${key.replace('_', ' ')}</button>`).join('')}</div></div><div id="recordPanel"></div></section>
+      <section class="card"><h2>School records</h2>
+        <div class="toolbar"><div id="entityButtons">${Object.keys(entities).map(key => `<button class="${activeEntity === key ? '' : 'secondary'}" data-entity="${key}" onclick="selectEntity('${key}')">${key.replace('_', ' ')}</button>`).join('')}</div></div>
+        <div id="recordPanel"></div></section>
       <section class="card"><h2>Grading formula and schedule slots</h2><p class="muted">Period options: Prelim, Midterm, Final. Component weights must total 1.00 (100%).</p><div id="configPanel"></div></section>
       <section class="card"><h2>Grade workflow</h2><p>Monitor uploads, request corrections, approve, and finalize student grades.</p><a href="grades.html">Open grade management</a></section>`;
     await Promise.all([loadEntity(), loadConfig()]);
   } catch (error) { box.innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
 }
-function selectEntity(name) { activeEntity = name; loadEntity(); }
+
+function selectEntity(name) {
+  activeEntity = name;
+  editingId = '';
+  document.querySelectorAll('#entityButtons button').forEach(btn => {
+    btn.className = (btn.dataset.entity === name) ? '' : 'secondary';
+  });
+  loadEntity();
+}
+
 function inputFor([name, label], value = '') {
-  if (name === 'role') return `<label class="field">${esc(label)}<select data-field="role"><option>student</option><option>parent</option><option>teacher</option><option>adviser</option><option>admin</option></select></label>`;
-  if (name === 'unavailable') return `<label class="field">${esc(label)}<textarea data-field="unavailable" rows="2" placeholder="Mon 08:00-09:00, Tue 13:00-14:00"></textarea></label>`;
-  const type = name === 'password' ? 'password' : name === 'email' || name === 'parentEmail' || name === 'teacherEmail' ? 'email' : 'text';
+  // Dropdown for Role
+  if (name === 'role') {
+    return `<label class="field">${esc(label)}<select data-field="role"><option ${value === 'student' ? 'selected' : ''}>student</option><option ${value === 'parent' ? 'selected' : ''}>parent</option><option ${value === 'teacher' ? 'selected' : ''}>teacher</option><option ${value === 'adviser' ? 'selected' : ''}>adviser</option><option ${value === 'admin' ? 'selected' : ''}>admin</option></select></label>`;
+  }
+  // Dropdown for Section
+  if (name === 'section' && cachedOptions.sections?.length) {
+    return `<label class="field">${esc(label)}<select data-field="section">${cachedOptions.sections.map(s => `<option value="${esc(s.name)}" ${value === s.name ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>`;
+  }
+  // Dropdown for Subject
+  if (name === 'subject' && cachedOptions.subjects?.length) {
+    return `<label class="field">${esc(label)}<select data-field="subject">${cachedOptions.subjects.map(s => `<option value="${esc(s.name)}" ${value === s.name ? 'selected' : ''}>${esc(s.name)}${s.code ? ` (${esc(s.code)})` : ''}</option>`).join('')}</select></label>`;
+  }
+  // Dropdown for Teacher Email
+  if (name === 'teacherEmail' && cachedOptions.teachers?.length) {
+    return `<label class="field">${esc(label)}<select data-field="teacherEmail" onchange="syncTeacherName(this)">${cachedOptions.teachers.map(t => `<option value="${esc(t.email)}" data-name="${esc(t.name)}" ${value === t.email ? 'selected' : ''}>${esc(t.name)} · ${esc(t.email)}</option>`).join('')}</select></label>`;
+  }
+  // Dropdown for Adviser Name
+  if (name === 'adviser' && cachedOptions.teachers?.length) {
+    return `<label class="field">${esc(label)}<select data-field="adviser">${cachedOptions.teachers.map(t => `<option value="${esc(t.name)}" ${value === t.name ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>`;
+  }
+  // Dropdown for Room
+  if (name === 'room' && cachedOptions.rooms?.length) {
+    return `<label class="field">${esc(label)}<select data-field="room">${cachedOptions.rooms.map(r => `<option value="${esc(r.name)}" ${value === r.name ? 'selected' : ''}>${esc(r.name)}${r.capacity ? ` (Cap: ${r.capacity})` : ''}</option>`).join('')}</select></label>`;
+  }
+  // Dropdown for Grade Level
+  if (name === 'gradeLevel') {
+    const levels = ['Grade 7', 'Grade 8', 'Grade 9', 'Grade 10', 'Grade 11', 'Grade 12', 'College 1st Year', 'College 2nd Year', 'College 3rd Year', 'College 4th Year'];
+    return `<label class="field">${esc(label)}<select data-field="gradeLevel">${levels.map(lvl => `<option value="${lvl}" ${value === lvl ? 'selected' : ''}>${lvl}</option>`).join('')}</select></label>`;
+  }
+  // Textarea for Unavailable slots
+  if (name === 'unavailable') {
+    return `<label class="field">${esc(label)}<textarea data-field="unavailable" rows="2" placeholder="Mon 08:00-09:00, Tue 13:00-14:00">${esc(value)}</textarea></label>`;
+  }
+  const type = name === 'password' ? 'password' : name.includes('Email') ? 'email' : 'text';
   return `<label class="field">${esc(label)}<input data-field="${name}" type="${type}" value="${esc(value)}" ${name === 'password' ? 'autocomplete="new-password"' : ''}></label>`;
 }
+
+function syncTeacherName(select) {
+  const selected = select.selectedOptions[0];
+  const nameInput = document.querySelector('#recordForm [data-field="teacherName"]');
+  if (selected && nameInput) nameInput.value = selected.dataset.name || '';
+}
+
 async function loadEntity() {
   try {
     const records = await api(`manage/${activeEntity}`);
     const definitions = entities[activeEntity];
-    document.getElementById('recordPanel').innerHTML = `<form class="card" id="recordForm" onsubmit="saveRecord(event)"><h3>${editingId ? 'Edit' : 'Add'} ${activeEntity.replace('_', ' ')}</h3>${definitions.map(([key, label]) => inputFor([key, label])).join('')}<br><button>${editingId ? 'Save changes' : 'Add record'}</button>${editingId ? '<button type="button" class="secondary" onclick="cancelEdit()">Cancel</button>' : ''}<div id="recordError" class="err"></div></form>
-      <div style="overflow:auto"><table><thead><tr>${definitions.filter(([key]) => key !== 'password').map(([, label]) => `<th>${esc(label)}</th>`).join('')}<th>Actions</th></tr></thead><tbody>${records.map(record => `<tr>${definitions.filter(([key]) => key !== 'password').map(([key]) => `<td>${esc(key === 'unavailable' && Array.isArray(record[key]) ? record[key].map(slot => `${slot.day} ${slot.start}-${slot.end}`).join(', ') : Array.isArray(record[key]) ? record[key].join(', ') : record[key] ?? '')}</td>`).join('')}<td><button class="secondary" onclick="editRecord('${record._id}')">Edit</button><button class="danger" onclick="deleteRecord('${record._id}')">Delete</button></td></tr>`).join('')}</tbody></table>${records.length ? '' : '<p class="empty">No records yet.</p>'}</div>`;
+    document.getElementById('recordPanel').innerHTML = `
+      <form class="card" id="recordForm" onsubmit="saveRecord(event)">
+        <h3>${editingId ? 'Edit' : 'Add'} ${activeEntity.replace('_', ' ')}</h3>
+        ${definitions.map(([key, label]) => inputFor([key, label])).join('')}
+        <br><button>${editingId ? 'Save changes' : 'Add record'}</button>
+        ${editingId ? '<button type="button" class="secondary" onclick="cancelEdit()">Cancel</button>' : ''}
+        <div id="recordError" class="err"></div>
+      </form>
+      <div style="overflow:auto">
+        <div class="toolbar"><input class="search-box" id="recordSearch" placeholder="🔍 Search ${activeEntity.replace('_', ' ')}..."></div>
+        <table id="recordsTable"><thead><tr>${definitions.filter(([key]) => key !== 'password').map(([, label]) => `<th>${esc(label)}</th>`).join('')}<th>Actions</th></tr></thead><tbody>
+          ${records.map(record => `<tr>${definitions.filter(([key]) => key !== 'password').map(([key]) => `<td>${esc(key === 'unavailable' && Array.isArray(record[key]) ? record[key].map(slot => `${slot.day} ${slot.start}-${slot.end}`).join(', ') : Array.isArray(record[key]) ? record[key].join(', ') : record[key] ?? '')}</td>`).join('')}<td><button class="secondary" onclick="editRecord('${record._id}')">Edit</button><button class="danger" onclick="deleteRecord('${record._id}')">Delete</button></td></tr>`).join('')}
+        </tbody></table>
+        ${records.length ? '' : '<p class="empty">No records yet.</p>'}
+      </div>`;
+    makeTableSearchable('recordSearch', '#recordsTable');
+    // Pre-populate teacherName if empty on teacher_assignments
+    const teacherEmailSelect = document.querySelector('#recordForm [data-field="teacherEmail"]');
+    if (teacherEmailSelect) syncTeacherName(teacherEmailSelect);
   } catch (error) { document.getElementById('recordPanel').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
 }
+
 function formValues() {
   const values = {};
   document.querySelectorAll('#recordForm [data-field]').forEach(input => {
     let value = input.value.trim();
     if (['subjects', 'children'].includes(input.dataset.field)) value = value ? value.split(',').map(item => item.trim()).filter(Boolean) : [];
     if (input.dataset.field === 'unavailable') value = value ? value.split(',').map(entry => {
-      const match = entry.trim().match(/^(Mon|Tue|Wed|Thu|Fri)\s+(\d{2}:\d{2})-(\d{2}:\d{2})$/i);
+      const match = entry.trim().match(/^(Mon|Tue|Wed|Thu|Fri|Sat)\s+(\d{2}:\d{2})-(\d{2}:\d{2})$/i);
       if (!match || match[2] >= match[3]) throw new Error(`Invalid unavailable slot: ${entry.trim()}`);
       return { day: match[1][0].toUpperCase() + match[1].slice(1).toLowerCase(), start: match[2], end: match[3] };
     }) : [];
@@ -60,14 +133,18 @@ function formValues() {
   });
   return values;
 }
+
 async function saveRecord(event) {
   event.preventDefault();
   try {
     const values = formValues();
     await api(`manage/${activeEntity}${editingId ? `/${editingId}` : ''}`, editingId ? 'PUT' : 'POST', values);
     editingId = ''; await loadEntity();
-  } catch (error) { document.getElementById('recordError').textContent = error.error || 'Could not save record.'; }
+  } catch (error) {
+    document.getElementById('recordError').textContent = error.error || error.message || 'Could not save record.';
+  }
 }
+
 async function editRecord(id) {
   const records = await api(`manage/${activeEntity}`); const record = records.find(item => item._id === id);
   if (!record) return;
@@ -78,18 +155,22 @@ async function editRecord(id) {
     input.value = key === 'unavailable' ? (record[key] || []).map(slot => `${slot.day} ${slot.start}-${slot.end}`).join(', ')
       : Array.isArray(record[key]) ? record[key].join(', ') : record[key] ?? '';
   }
-  const role = document.querySelector('#recordForm [data-field="role"]'); if (role) role.value = record.role;
+  const role = document.querySelector('#recordForm [data-field="role"]'); if (role && record.role) role.value = record.role;
 }
+
 function cancelEdit() { editingId = ''; loadEntity(); }
+
 async function deleteRecord(id) {
   if (!confirm('Delete this record? Related records are not automatically deleted.')) return;
   try { await api(`manage/${activeEntity}/${id}`, 'DELETE'); await loadEntity(); }
-  catch (error) { alert(error.error || 'Could not delete record.'); }
+  catch (error) { alert(error.error || error.message || 'Could not delete record.'); }
 }
+
 async function loadConfig() {
   const config = await api('config'); const weights = config.weights || {};
   document.getElementById('configPanel').innerHTML = `<form onsubmit="saveConfig(event)"><div>${Object.entries(weights).map(([key, value]) => `<label class="field">${esc(key)} weight<input class="weight" data-name="${esc(key)}" type="number" min="0" max="1" step="0.01" value="${value}" required></label>`).join('')}</div><h3>Available time slots</h3><p class="muted">One slot per line in 24-hour time, for example 08:00-09:00.</p><textarea id="slots" rows="4">${(config.timeSlots || []).map(slot => `${esc(slot.start)}-${esc(slot.end)}`).join('\n')}</textarea><br><button>Save academic settings</button><span id="configMessage" class="muted"></span></form>`;
 }
+
 async function saveConfig(event) {
   event.preventDefault();
   const weights = {};
@@ -98,7 +179,8 @@ async function saveConfig(event) {
     const [start, end] = line.trim().split('-').map(value => value.trim()); return { start, end };
   });
   try { await api('config', 'PUT', { weights, timeSlots, days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] }); document.getElementById('configMessage').textContent = 'Settings saved.'; }
-  catch (error) { document.getElementById('configMessage').textContent = error.error || 'Settings were not saved.'; }
+  catch (error) { document.getElementById('configMessage').textContent = error.error || error.message || 'Settings were not saved.'; }
 }
+
 load();
-</script><!-- Admin page: school records, user accounts, grading weights, and schedule settings. --></body></html>
+</script></body></html>

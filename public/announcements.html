@@ -3,29 +3,98 @@
 <script src="common.js"></script><script>
 // The API applies audience rules at read time for every role.
 init('Announcements');
+let cachedSections = [];
+
 async function load() {
   try {
-    const announcements = await api('announcements');
+    const [announcements, options] = await Promise.all([
+      api('announcements'),
+      api('options').catch(() => ({ sections: [] }))
+    ]);
+    cachedSections = options.sections || [];
+
     const canPost = ['admin', 'adviser', 'teacher'].includes(user.role);
-    const form = canPost ? `<section class="card"><h2>Post an announcement</h2><label class="field">Title<input id="titleInput" required placeholder="Announcement title"></label><label class="field">Audience<select id="targetType" onchange="toggleAudience()"><option value="all">Entire school</option><option value="role">Role</option><option value="section">Section</option><option value="user">Individual account</option></select></label><span id="audienceDetail"></span><br><label class="field">Message<textarea id="contentInput" rows="4" placeholder="Write the announcement"></textarea></label><br><button onclick="postAnnouncement()">Publish</button><div id="error" class="err"></div></section>` : '';
-    const list = announcements.length ? announcements.map(item => `<article class="card"><div class="toolbar"><h2>${esc(item.title)}</h2>${badge(item.targetType === 'all' ? 'Entire school' : `${item.targetType}: ${item.targetValue}`)}</div><p>${esc(item.content).replaceAll('\n', '<br>')}</p><small class="muted">${esc(item.author)} · ${new Date(item.at).toLocaleString()}</small></article>`).join('') : '<section class="card empty">No announcements are available for your account.</section>';
-    document.getElementById('box').innerHTML = form + list;
+    const form = canPost ? `
+      <section class="card">
+        <h2>Post an announcement</h2>
+        <label class="field">Title<input id="titleInput" required placeholder="Announcement title"></label>
+        <label class="field">Audience
+          <select id="targetType" onchange="toggleAudience()">
+            <option value="all">Entire school</option>
+            <option value="role">Role</option>
+            <option value="section">Section</option>
+            <option value="user">Individual account</option>
+          </select>
+        </label>
+        <span id="audienceDetail"></span><br>
+        <label class="field">Message<textarea id="contentInput" rows="4" placeholder="Write the announcement"></textarea></label><br>
+        <button onclick="postAnnouncement()">Publish</button>
+        <div id="error" class="err"></div>
+      </section>` : '';
+
+    const searchBar = announcements.length ? `<div class="toolbar"><input class="search-box" id="announcementSearch" placeholder="🔍 Search announcements..."></div>` : '';
+
+    const list = announcements.length ? `
+      <div id="announcementList">
+        ${announcements.map(item => `
+          <article class="card">
+            <div class="toolbar">
+              <h2>${esc(item.title)}</h2>
+              ${badge(item.targetType === 'all' ? 'Entire school' : `${item.targetType}: ${item.targetValue}`)}
+            </div>
+            <p>${esc(item.content).replaceAll('\n', '<br>')}</p>
+            <small class="muted">${esc(item.author)} · ${new Date(item.at).toLocaleString()}</small>
+          </article>`).join('')}
+      </div>` : '<section class="card empty">No announcements are available for your account.</section>';
+
+    document.getElementById('box').innerHTML = form + searchBar + list;
     if (canPost) toggleAudience();
+
+    const searchInput = document.getElementById('announcementSearch');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.toLowerCase().trim();
+        document.querySelectorAll('#announcementList article.card').forEach(card => {
+          card.style.display = (!q || card.textContent.toLowerCase().includes(q)) ? '' : 'none';
+        });
+      });
+    }
   } catch (error) { document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
 }
+
 function toggleAudience() {
   const type = document.getElementById('targetType').value;
-  const choices = type === 'role' ? `<select id="targetValue"><option value="student">Students</option><option value="parent">Parents</option><option value="teacher">Teachers</option><option value="adviser">Advisers</option><option value="admin">Administrators</option></select>`
-    : type === 'section' ? '<input id="targetValue" placeholder="Grade 10 - St. Catherine">' : type === 'user' ? '<input id="targetValue" type="email" placeholder="user@school.ph">' : '';
+  const sectionChoices = cachedSections.length
+    ? `<select id="targetValue">${cachedSections.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('')}</select>`
+    : '<input id="targetValue" placeholder="Grade 10 - St. Catherine">';
+
+  const choices = type === 'role'
+    ? `<label class="field">Target role<select id="targetValue"><option value="student">Students</option><option value="parent">Parents</option><option value="teacher">Teachers</option><option value="adviser">Advisers</option><option value="admin">Administrators</option></select></label>`
+    : type === 'section'
+    ? `<label class="field">Target section${sectionChoices}</label>`
+    : type === 'user'
+    ? '<label class="field">Target email<input id="targetValue" type="email" placeholder="user@sccvalenzuela.edu.ph"></label>'
+    : '';
+
   document.getElementById('audienceDetail').innerHTML = choices;
 }
+
 async function postAnnouncement() {
   const targetType = document.getElementById('targetType').value;
-  const targetValue = targetType === 'all' ? '' : document.getElementById('targetValue').value.trim();
+  const targetElem = document.getElementById('targetValue');
+  const targetValue = targetType === 'all' ? '' : (targetElem?.value || '').trim();
+  const title = (document.getElementById('titleInput')?.value || '').trim();
+  const content = (document.getElementById('contentInput')?.value || '').trim();
+  if (!title || !content) {
+    document.getElementById('error').textContent = 'Please enter both a title and message content.';
+    return;
+  }
   try {
-    await api('announcements', 'POST', { title: document.getElementById('titleInput').value, content: document.getElementById('contentInput').value, targetType, targetValue });
+    await api('announcements', 'POST', { title, content, targetType, targetValue });
+    alert('Announcement published successfully!');
     await load();
-  } catch (error) { document.getElementById('error').textContent = error.error || 'Announcement could not be posted.'; }
+  } catch (error) { document.getElementById('error').textContent = error.error || error.message || 'Announcement could not be posted.'; }
 }
+
 load();
-</script><!-- Announcements page: reads notices for this account and lets permitted staff publish them. --></body></html>
+</script></body></html>

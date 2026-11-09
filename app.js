@@ -77,6 +77,22 @@ app.post('/api/login', route(async (req, res) => {
   res.json({ token, user: cleanUser(user) });
 }));
 app.get('/api/me', auth(), (req, res) => res.json(req.user));
+app.post('/api/logout', auth(), (req, res) => {
+  const token = req.get('token');
+  if (token) sessions.delete(token);
+  res.json({ ok: true });
+});
+
+app.get('/api/options', auth(), route(async (req, res) => {
+  const [sections, subjects, teachers, rooms, students] = await Promise.all([
+    collection('sections').find({}, { projection: { name: 1, gradeLevel: 1, adviser: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('subjects').find({}, { projection: { name: 1, code: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('teachers').find({}, { projection: { name: 1, email: 1, subjects: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('rooms').find({}, { projection: { name: 1, capacity: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('students').find({}, { projection: { studentId: 1, name: 1, section: 1, email: 1, _id: 0 } }).sort({ name: 1 }).toArray()
+  ]);
+  res.json({ sections, subjects, teachers, rooms, students });
+}));
 
 app.get('/api/stats', auth(), route(async (req, res) => {
   const role = req.user.role;
@@ -135,12 +151,17 @@ app.post('/api/uploads', auth(['teacher']), route(async (req, res) => {
   const assignment = await collection('teacher_assignments').findOne({ teacherEmail: req.user.email, subject, section });
   if (!assignment) return sendError(res, 'This subject and section are not assigned to your account.', 403);
   const batch = { subject, section, period, teacherEmail: req.user.email, teacherName: req.user.name, status: 'Uploaded', uploadedAt: new Date() };
-  const correction = await collection('uploads').findOne({ ...batch, status: 'For Correction' });
+  const correction = await collection('uploads').findOne({ subject, section, period, teacherEmail: req.user.email, status: 'For Correction' });
+  const existingDraft = !correction && await collection('uploads').findOne({ subject, section, period, teacherEmail: req.user.email, status: 'Uploaded' });
   let uploadId;
   if (correction) {
     uploadId = correction._id;
     batch.wasCorrected = true;
     await collection('uploads').updateOne({ _id: uploadId }, { $set: batch, $push: { history: { at: new Date(), by: req.user.name, action: `Resubmitted ${gradeRows.length} corrected grades` } } });
+    await collection('grades').deleteMany({ uploadId: String(uploadId) });
+  } else if (existingDraft) {
+    uploadId = existingDraft._id;
+    await collection('uploads').updateOne({ _id: uploadId }, { $set: batch, $push: { history: { at: new Date(), by: req.user.name, action: `Re-uploaded ${gradeRows.length} grades` } } });
     await collection('grades').deleteMany({ uploadId: String(uploadId) });
   } else {
     const result = await collection('uploads').insertOne({ ...batch, history: [{ at: new Date(), by: req.user.name, action: `Uploaded ${gradeRows.length} grades` }] });
@@ -257,8 +278,22 @@ app.get('/api/requests', auth(), route(async (req, res) => {
 app.post('/api/requests', auth(['student', 'parent']), route(async (req, res) => {
   const kinds = ['Transcript of Records', 'Good Moral Certificate', 'Enrollment Certificate', 'Other'];
   if (!kinds.includes(req.body.kind)) return sendError(res, 'Choose a valid document type.');
-  await collection('document_requests').insertOne({ kind: req.body.kind, userEmail: req.user.email, userName: req.user.name,
-    studentId: req.user.studentId || req.user.children?.[0], status: 'Pending', createdAt: new Date() });
+  let studentId = req.user.studentId;
+  if (req.user.role === 'parent') {
+    const requestedId = String(req.body.studentId || '').trim();
+    const parentChildren = req.user.children || [];
+    studentId = (requestedId && parentChildren.includes(requestedId)) ? requestedId : (parentChildren[0] || '');
+  }
+  const student = studentId ? await collection('students').findOne({ studentId }) : null;
+  const targetLabel = student ? `${student.name} (${studentId})` : (studentId || req.user.name);
+  await collection('document_requests').insertOne({
+    kind: req.body.kind,
+    userEmail: req.user.email,
+    userName: req.user.role === 'parent' ? `${req.user.name} for ${targetLabel}` : req.user.name,
+    studentId: studentId || '',
+    status: 'Pending',
+    createdAt: new Date()
+  });
   res.json({ ok: true });
 }));
 app.put('/api/requests/:id', auth(['admin', 'adviser']), route(async (req, res) => {
@@ -292,6 +327,9 @@ app.post('/api/schedules', auth(['admin']), route(async (req, res) => {
   const conflict = await scheduleConflict(row);
   if (conflict) return res.status(409).json({ error: `Conflict: ${conflict.subject} in ${conflict.section}, ${conflict.room}, ${conflict.start}-${conflict.end}.` });
   row.substituteEmail = '';
+  const teacher = await collection('teachers').findOne({ email: row.teacherEmail }) || await collection('users').findOne({ email: row.teacherEmail });
+  row.teacherName = teacher?.name || row.teacherEmail;
+  row.teacherStatus = 'Present';
   await collection('schedules').insertOne(row);
   res.json({ ok: true });
 }));
@@ -328,9 +366,13 @@ app.post('/api/substitute', auth(['admin', 'adviser']), route(async (req, res) =
     !teacher.unavailable?.some(item => item.day === target.day && item.start < target.end && target.start < item.end));
   const workload = teacher => all.filter(item => item.teacherEmail === teacher.email || item.substituteEmail === teacher.email).length;
   candidates.sort((a, b) => Number((b.subjects || []).includes(target.subject)) - Number((a.subjects || []).includes(target.subject)) || workload(a) - workload(b));
+  // Always record absence on the scheduled class
+  await collection('schedules').updateOne({ _id: target._id }, { $set: { absent: true, teacherStatus: 'Absent' } });
   const substitute = candidates[0];
-  if (!substitute) return sendError(res, 'No conflict-free available substitute was found.', 409);
-  await collection('schedules').updateOne({ _id: target._id }, { $set: { substituteEmail: substitute.email, substituteName: substitute.name, absent: true, teacherStatus: 'Absent' } });
+  if (!substitute) {
+    return res.json({ ok: true, substitute: null, message: 'Instructor marked absent. No conflict-free substitute is currently available.' });
+  }
+  await collection('schedules').updateOne({ _id: target._id }, { $set: { substituteEmail: substitute.email, substituteName: substitute.name } });
   const message = `${substitute.name} will cover ${target.subject}, ${target.section}, ${target.day} ${target.start}-${target.end}.`;
   const sectionStudents = await collection('students').find({ section: target.section }).toArray();
   const parents = await collection('users').find({ role: 'parent', children: { $in: sectionStudents.map(student => student.studentId) } }).toArray();
@@ -339,7 +381,7 @@ app.post('/api/substitute', auth(['admin', 'adviser']), route(async (req, res) =
     ...sectionStudents.filter(student => student.email).map(student => ({ to: student.email, message, at: new Date() })),
     ...parents.map(parent => ({ to: parent.email, message, at: new Date() }))];
   await collection('notifications').insertMany(notices);
-  res.json({ ok: true, substitute: substitute.name });
+  res.json({ ok: true, substitute: substitute.name, message: `Substitute assigned: ${substitute.name}` });
 }));
 
 // ---------- Admin CRUD and grading configuration ----------
@@ -368,6 +410,7 @@ app.put('/api/manage/:entity/:id', auth(['admin']), route(async (req, res) => {
   if (!name || !id) return sendError(res, 'Unknown record.');
   const fields = { ...req.body }; delete fields._id;
   if (name === 'users') {
+    if (fields.email) fields.email = String(fields.email).toLowerCase();
     if (fields.password) fields.pw = hash(fields.password);
     delete fields.password;
   }

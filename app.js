@@ -77,6 +77,23 @@ app.post('/api/login', route(async (req, res) => {
   res.json({ token, user: cleanUser(user) });
 }));
 app.get('/api/me', auth(), (req, res) => res.json(req.user));
+app.post('/api/logout', auth(), (req, res) => {
+  const token = req.get('token');
+  if (token) sessions.delete(token);
+  res.json({ ok: true });
+});
+
+app.get('/api/options', auth(), route(async (req, res) => {
+  const [sections, subjects, teachers, rooms, students, grades] = await Promise.all([
+    collection('sections').find({}, { projection: { name: 1, gradeLevel: 1, adviser: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('subjects').find({}, { projection: { name: 1, code: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('teachers').find({}, { projection: { name: 1, email: 1, subjects: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('rooms').find({}, { projection: { name: 1, capacity: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('students').find({}, { projection: { studentId: 1, name: 1, section: 1, email: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('sections').distinct('gradeLevel')
+  ]);
+  res.json({ sections, subjects, teachers, rooms, students, grades });
+}));
 
 app.get('/api/stats', auth(), route(async (req, res) => {
   const role = req.user.role;
@@ -135,12 +152,17 @@ app.post('/api/uploads', auth(['teacher']), route(async (req, res) => {
   const assignment = await collection('teacher_assignments').findOne({ teacherEmail: req.user.email, subject, section });
   if (!assignment) return sendError(res, 'This subject and section are not assigned to your account.', 403);
   const batch = { subject, section, period, teacherEmail: req.user.email, teacherName: req.user.name, status: 'Uploaded', uploadedAt: new Date() };
-  const correction = await collection('uploads').findOne({ ...batch, status: 'For Correction' });
+  const correction = await collection('uploads').findOne({ subject, section, period, teacherEmail: req.user.email, status: 'For Correction' });
+  const existingDraft = !correction && await collection('uploads').findOne({ subject, section, period, teacherEmail: req.user.email, status: 'Uploaded' });
   let uploadId;
   if (correction) {
     uploadId = correction._id;
     batch.wasCorrected = true;
     await collection('uploads').updateOne({ _id: uploadId }, { $set: batch, $push: { history: { at: new Date(), by: req.user.name, action: `Resubmitted ${gradeRows.length} corrected grades` } } });
+    await collection('grades').deleteMany({ uploadId: String(uploadId) });
+  } else if (existingDraft) {
+    uploadId = existingDraft._id;
+    await collection('uploads').updateOne({ _id: uploadId }, { $set: batch, $push: { history: { at: new Date(), by: req.user.name, action: `Re-uploaded ${gradeRows.length} grades` } } });
     await collection('grades').deleteMany({ uploadId: String(uploadId) });
   } else {
     const result = await collection('uploads').insertOne({ ...batch, history: [{ at: new Date(), by: req.user.name, action: `Uploaded ${gradeRows.length} grades` }] });
@@ -257,8 +279,22 @@ app.get('/api/requests', auth(), route(async (req, res) => {
 app.post('/api/requests', auth(['student', 'parent']), route(async (req, res) => {
   const kinds = ['Transcript of Records', 'Good Moral Certificate', 'Enrollment Certificate', 'Other'];
   if (!kinds.includes(req.body.kind)) return sendError(res, 'Choose a valid document type.');
-  await collection('document_requests').insertOne({ kind: req.body.kind, userEmail: req.user.email, userName: req.user.name,
-    studentId: req.user.studentId || req.user.children?.[0], status: 'Pending', createdAt: new Date() });
+  let studentId = req.user.studentId;
+  if (req.user.role === 'parent') {
+    const requestedId = String(req.body.studentId || '').trim();
+    const parentChildren = req.user.children || [];
+    studentId = (requestedId && parentChildren.includes(requestedId)) ? requestedId : (parentChildren[0] || '');
+  }
+  const student = studentId ? await collection('students').findOne({ studentId }) : null;
+  const targetLabel = student ? `${student.name} (${studentId})` : (studentId || req.user.name);
+  await collection('document_requests').insertOne({
+    kind: req.body.kind,
+    userEmail: req.user.email,
+    userName: req.user.role === 'parent' ? `${req.user.name} for ${targetLabel}` : req.user.name,
+    studentId: studentId || '',
+    status: 'Pending',
+    createdAt: new Date()
+  });
   res.json({ ok: true });
 }));
 app.put('/api/requests/:id', auth(['admin', 'adviser']), route(async (req, res) => {
@@ -292,6 +328,9 @@ app.post('/api/schedules', auth(['admin']), route(async (req, res) => {
   const conflict = await scheduleConflict(row);
   if (conflict) return res.status(409).json({ error: `Conflict: ${conflict.subject} in ${conflict.section}, ${conflict.room}, ${conflict.start}-${conflict.end}.` });
   row.substituteEmail = '';
+  const teacher = await collection('teachers').findOne({ email: row.teacherEmail }) || await collection('users').findOne({ email: row.teacherEmail });
+  row.teacherName = teacher?.name || row.teacherEmail;
+  row.teacherStatus = 'Present';
   await collection('schedules').insertOne(row);
   res.json({ ok: true });
 }));
@@ -328,9 +367,13 @@ app.post('/api/substitute', auth(['admin', 'adviser']), route(async (req, res) =
     !teacher.unavailable?.some(item => item.day === target.day && item.start < target.end && target.start < item.end));
   const workload = teacher => all.filter(item => item.teacherEmail === teacher.email || item.substituteEmail === teacher.email).length;
   candidates.sort((a, b) => Number((b.subjects || []).includes(target.subject)) - Number((a.subjects || []).includes(target.subject)) || workload(a) - workload(b));
+  // Always record absence on the scheduled class
+  await collection('schedules').updateOne({ _id: target._id }, { $set: { absent: true, teacherStatus: 'Absent' } });
   const substitute = candidates[0];
-  if (!substitute) return sendError(res, 'No conflict-free available substitute was found.', 409);
-  await collection('schedules').updateOne({ _id: target._id }, { $set: { substituteEmail: substitute.email, substituteName: substitute.name, absent: true, teacherStatus: 'Absent' } });
+  if (!substitute) {
+    return res.json({ ok: true, substitute: null, message: 'Instructor marked absent. No conflict-free substitute is currently available.' });
+  }
+  await collection('schedules').updateOne({ _id: target._id }, { $set: { substituteEmail: substitute.email, substituteName: substitute.name } });
   const message = `${substitute.name} will cover ${target.subject}, ${target.section}, ${target.day} ${target.start}-${target.end}.`;
   const sectionStudents = await collection('students').find({ section: target.section }).toArray();
   const parents = await collection('users').find({ role: 'parent', children: { $in: sectionStudents.map(student => student.studentId) } }).toArray();
@@ -339,7 +382,7 @@ app.post('/api/substitute', auth(['admin', 'adviser']), route(async (req, res) =
     ...sectionStudents.filter(student => student.email).map(student => ({ to: student.email, message, at: new Date() })),
     ...parents.map(parent => ({ to: parent.email, message, at: new Date() }))];
   await collection('notifications').insertMany(notices);
-  res.json({ ok: true, substitute: substitute.name });
+  res.json({ ok: true, substitute: substitute.name, message: `Substitute assigned: ${substitute.name}` });
 }));
 
 // ---------- Admin CRUD and grading configuration ----------
@@ -359,6 +402,68 @@ app.post('/api/manage/:entity', auth(['admin']), route(async (req, res) => {
     if (!item.email || !item.password || !['admin', 'adviser', 'teacher', 'student', 'parent'].includes(item.role)) return sendError(res, 'User email, password, and valid role are required.');
     item.pw = hash(item.password); delete item.password;
   }
+  // --- Student registration enhancements ---
+  if (name === 'students') {
+    const requiredFields = ['name', 'birthdate', 'address', 'guardianName', 'guardianMobile', 'studentContact', 'gradeLevel', 'section'];
+    for (const field of requiredFields) {
+      if (!item[field] || !String(item[field]).trim()) return sendError(res, `${field} is required.`);
+    }
+    // Strand validation for SHS
+    if (['Grade 11', 'Grade 12'].includes(item.gradeLevel)) {
+      const validStrands = ['STEM', 'ABM', 'HUMSS', 'ICT'];
+      if (!item.strand || !validStrands.includes(item.strand)) return sendError(res, 'A valid strand (STEM, ABM, HUMSS, ICT) is required for Grade 11 and Grade 12.');
+    } else {
+      delete item.strand;
+    }
+    // Auto-calculate age from birthdate
+    const birth = new Date(item.birthdate);
+    const today = new Date();
+    let age = today.getFullYear() - birth.getFullYear();
+    const monthDiff = today.getMonth() - birth.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) age--;
+    item.age = age;
+    // Auto-generate student ID: SCCV-{year}-{seq}
+    const year = new Date().getFullYear();
+    const counter = await collection('counters').findOneAndUpdate(
+      { _id: 'studentId' },
+      { $inc: { seq: 1 } },
+      { upsert: true, returnDocument: 'after' }
+    );
+    const seq = String(counter.seq || counter.value?.seq).padStart(3, '0');
+    item.studentId = `SCCV-${year}-${seq}`;
+    await collection('students').createIndex({ studentId: 1 }, { unique: true });
+    await collection('students').insertOne(item);
+    // Auto-create student_documents
+    const docNames = ['Birth Certificate', 'Report Card (Form 138)', 'Good Moral Certificate', 'Transcript of Records', 'PSA Certificate', 'ID Photos (2x2)'];
+    const docs = docNames.map(docName => ({
+      studentId: item.studentId,
+      name: item.name,
+      document: docName,
+      status: 'Pending',
+      notes: '',
+      history: [],
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }));
+    await collection('student_documents').insertMany(docs);
+    return res.json({ ok: true, studentId: item.studentId });
+  }
+  // --- Teacher assignment validation ---
+  if (name === 'teacher_assignments') {
+    // Check required fields
+    if (!item.teacherEmail || !item.subject || !item.section) return sendError(res, 'teacherEmail, subject, and section are required.');
+    // Check section exists
+    const sectionDoc = await collection('sections').findOne({ name: item.section });
+    if (!sectionDoc) return sendError(res, 'The specified section does not exist.');
+    // Prevent duplicate assignments
+    const duplicate = await collection('teacher_assignments').findOne({ teacherEmail: item.teacherEmail, subject: item.subject, section: item.section });
+    if (duplicate) return sendError(res, 'This teacher is already assigned to this subject and section.');
+    // Check teacher workload (max 8)
+    const workloadCount = await collection('teacher_assignments').countDocuments({ teacherEmail: item.teacherEmail });
+    if (workloadCount >= 8) return sendError(res, 'This teacher already has 8 subject assignments (maximum reached).');
+    await collection('teacher_assignments').insertOne(item);
+    return res.json({ ok: true });
+  }
   if (!item.name && name !== 'teacher_assignments') return sendError(res, 'A name is required.');
   await collection(name).insertOne(item);
   res.json({ ok: true });
@@ -368,6 +473,7 @@ app.put('/api/manage/:entity/:id', auth(['admin']), route(async (req, res) => {
   if (!name || !id) return sendError(res, 'Unknown record.');
   const fields = { ...req.body }; delete fields._id;
   if (name === 'users') {
+    if (fields.email) fields.email = String(fields.email).toLowerCase();
     if (fields.password) fields.pw = hash(fields.password);
     delete fields.password;
   }
@@ -391,6 +497,32 @@ app.put('/api/config', auth(['admin']), route(async (req, res) => {
     return sendError(res, 'Every schedule slot must have a valid start time before its end time.');
   await collection('config').updateOne({ _id: 'system' }, { $set: { weights, timeSlots, days: req.body.days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] } }, { upsert: true });
   res.json({ ok: true });
+}));
+
+// ---------- Student Document Tracking ----------
+app.get('/api/student-documents', auth(['admin']), route(async (req, res) => {
+  const filter = req.query.studentId ? { studentId: req.query.studentId } : {};
+  res.json(await collection('student_documents').find(filter).sort({ createdAt: -1 }).toArray());
+}));
+app.put('/api/student-documents/:id', auth(['admin']), route(async (req, res) => {
+  const id = safeId(req.params.id);
+  if (!id) return sendError(res, 'Invalid document id.');
+  const validStatuses = ['Pending', 'Submitted', 'Processing', 'Ready for Claiming', 'Released', 'Rejected'];
+  const { status, notes } = req.body;
+  if (!status || !validStatuses.includes(status)) return sendError(res, 'Invalid status.');
+  const result = await collection('student_documents').updateOne({ _id: id }, {
+    $set: { status, notes: notes || '', updatedAt: new Date() },
+    $push: { history: { status, notes: notes || '', updatedBy: req.user.name, at: new Date() } }
+  });
+  if (!result.matchedCount) return sendError(res, 'Document not found.', 404);
+  res.json({ ok: true });
+}));
+app.get('/api/student-documents/history/:id', auth(['admin']), route(async (req, res) => {
+  const id = safeId(req.params.id);
+  if (!id) return sendError(res, 'Invalid document id.');
+  const doc = await collection('student_documents').findOne({ _id: id });
+  if (!doc) return sendError(res, 'Document not found.', 404);
+  res.json(doc.history || []);
 }));
 
 // Keep API failures JSON-shaped, including malformed JSON and unknown endpoints.
@@ -418,11 +550,11 @@ async function seed() {
   ].map(user => ({ ...user, pw: commonPassword }));
   await collection('users').insertMany(users);
   await collection('students').insertMany([
-    { studentId: 'SCC-2026-001', name: 'Juan Dela Cruz', email: 'juan@sccvalenzuela.edu.ph', section: 'Grade 10 - St. Catherine', parentEmail: 'parent@sccvalenzuela.edu.ph' },
-    { studentId: 'SCC-2026-002', name: 'Ana Lopez', email: 'ana@sccvalenzuela.edu.ph', section: 'Grade 10 - St. Catherine', parentEmail: 'parent@sccvalenzuela.edu.ph' }
+    { studentId: 'SCC-2026-001', name: 'Juan Dela Cruz', email: 'juan@sccvalenzuela.edu.ph', section: 'Grade 10 - St. Catherine', parentEmail: 'parent@sccvalenzuela.edu.ph', birthdate: '2010-05-15', age: 16, address: '123 Rizal St, Valenzuela City', guardianName: 'Teresa Dela Cruz', guardianMobile: '09171234567', studentContact: '09181234567', gradeLevel: 'Grade 10' },
+    { studentId: 'SCC-2026-002', name: 'Ana Lopez', email: 'ana@sccvalenzuela.edu.ph', section: 'Grade 10 - St. Catherine', parentEmail: 'parent@sccvalenzuela.edu.ph', birthdate: '2010-08-22', age: 16, address: '456 Bonifacio Ave, Valenzuela City', guardianName: 'Carmen Lopez', guardianMobile: '09179876543', studentContact: '09189876543', gradeLevel: 'Grade 10' }
   ]);
   await collection('teachers').insertMany(users.filter(user => user.role === 'teacher').map(user => ({ name: user.name, email: user.email, subjects: user.subjects, workload: 2, unavailable: [] })));
-  await collection('sections').insertMany([{ name: 'Grade 10 - St. Catherine', adviser: 'Maria Santos', gradeLevel: 'Grade 10' }, { name: 'Grade 9 - St. Dominic', adviser: 'Maria Santos', gradeLevel: 'Grade 9' }]);
+  await collection('sections').insertMany([{ name: 'Grade 10 - St. Catherine', adviser: 'Maria Santos', gradeLevel: 'Grade 10' }, { name: 'Grade 9 - St. Dominic', adviser: 'Maria Santos', gradeLevel: 'Grade 9' }, { name: 'Grade 11 - St. Thomas', adviser: 'Ramon Reyes', gradeLevel: 'Grade 11' }, { name: 'Grade 12 - St. Francis', adviser: 'Liza Cruz', gradeLevel: 'Grade 12' }]);
   await collection('subjects').insertMany(['Mathematics', 'Science', 'English', 'Filipino'].map(name => ({ name })));
   await collection('rooms').insertMany([{ name: 'Room 201', capacity: 40 }, { name: 'Science Lab', capacity: 32 }, { name: 'Room 203', capacity: 40 }]);
   await collection('teacher_assignments').insertMany([
@@ -432,7 +564,10 @@ async function seed() {
     { subject: 'Filipino', section: 'Grade 10 - St. Catherine', teacherEmail: 'cruz@sccvalenzuela.edu.ph', teacherName: 'Liza Cruz', room: 'Room 201' }
   ]);
   await collection('config').insertOne({ _id: 'system', weights: { Quiz: 0.3, Exam: 0.5, Project: 0.2 }, days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    timeSlots: [{ start: '08:00', end: '09:00' }, { start: '09:15', end: '10:15' }, { start: '10:30', end: '11:30' }, { start: '13:00', end: '14:00' }] });
+    timeSlots: [{ start: '08:00', end: '09:00' }, { start: '09:15', end: '10:15' }, { start: '10:30', end: '11:30' }, { start: '13:00', end: '14:00' }],
+    studentIdFormat: 'SCCV-{year}-{seq}',
+    requiredStudentDocs: ['Birth Certificate', 'Report Card (Form 138)', 'Good Moral Certificate', 'Transcript of Records', 'PSA Certificate', 'ID Photos (2x2)'],
+    shsStrands: ['STEM', 'ABM', 'HUMSS', 'ICT'] });
   await collection('schedules').insertMany([
     { subject: 'Mathematics', section: 'Grade 10 - St. Catherine', teacherEmail: 'reyes@sccvalenzuela.edu.ph', teacherName: 'Ramon Reyes', room: 'Room 201', day: 'Mon', dayIndex: 0, start: '08:00', end: '09:00', substituteEmail: '', teacherStatus: 'Absent' },
     { subject: 'Science', section: 'Grade 10 - St. Catherine', teacherEmail: 'reyes@sccvalenzuela.edu.ph', teacherName: 'Ramon Reyes', room: 'Science Lab', day: 'Mon', dayIndex: 0, start: '09:15', end: '10:15', substituteEmail: '', teacherStatus: 'Present' },

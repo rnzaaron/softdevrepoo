@@ -1,0 +1,136 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document tracking</title></head>
+<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead">Track and manage student document submissions, processing status, and release.</p><div id="box"></div></main>
+<script src="common.js"></script><script>
+init('Document tracking');
+
+const STATUSES = ['Pending', 'Submitted', 'Processing', 'Ready for Claiming', 'Released', 'Rejected'];
+let allDocs = [];
+let students = [];
+
+async function load() {
+  try {
+    const opts = await api('options');
+    students = opts.students || [];
+
+    const studentSelect = document.getElementById('studentFilter');
+    const selectedStudent = studentSelect ? studentSelect.value : '';
+    const statusSelect = document.getElementById('statusFilter');
+    const selectedStatus = statusSelect ? statusSelect.value : '';
+
+    const endpoint = selectedStudent ? 'student-documents?studentId=' + encodeURIComponent(selectedStudent) : 'student-documents';
+    allDocs = await api(endpoint);
+
+    render(selectedStudent, selectedStatus);
+  } catch (error) {
+    document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`;
+  }
+}
+
+function render(selectedStudent, selectedStatus) {
+  selectedStudent = selectedStudent || '';
+  selectedStatus = selectedStatus || '';
+
+  const filters = `<section class="card">
+    <div class="toolbar" style="gap:12px;flex-wrap:wrap">
+      <label class="field">Student
+        <select id="studentFilter" onchange="applyFilters()">
+          <option value="">All students</option>
+          ${students.map(s => `<option value="${esc(s.studentId)}" ${s.studentId === selectedStudent ? 'selected' : ''}>${esc(s.name)} (${esc(s.studentId)})</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">Status
+        <select id="statusFilter" onchange="applyFilters()">
+          <option value="">All</option>
+          ${STATUSES.map(st => `<option value="${esc(st)}" ${st === selectedStatus ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">Search
+        <input class="search-box" id="docSearch" placeholder="🔍 Search documents..." style="margin-top:0">
+      </label>
+    </div>
+  </section>`;
+
+  let filtered = allDocs;
+  if (selectedStatus) filtered = filtered.filter(d => d.status === selectedStatus);
+
+  const rows = filtered.length ? `<section class="card" style="overflow:auto">
+    <table id="docsTable"><thead><tr>
+      <th>Student ID</th><th>Student Name</th><th>Document</th><th>Submitted</th><th>Status</th><th>Notes</th><th>Last Updated</th><th>Actions</th>
+    </tr></thead><tbody>${filtered.map(doc => `<tr>
+      <td>${esc(doc.studentId)}</td>
+      <td><b>${esc(doc.name)}</b></td>
+      <td>${esc(doc.documentName || doc.kind || '')}</td>
+      <td>${new Date(doc.createdAt).toLocaleString()}</td>
+      <td>${badge(doc.status)}</td>
+      <td><input type="text" id="notes-${doc._id}" value="${esc(doc.notes || '')}" style="width:120px" placeholder="Add notes..."></td>
+      <td>${doc.updatedAt ? new Date(doc.updatedAt).toLocaleString() : '—'}</td>
+      <td style="white-space:nowrap">
+        <select id="st-${doc._id}">${STATUSES.map(st => `<option${doc.status === st ? ' selected' : ''}>${esc(st)}</option>`).join('')}</select>
+        <button onclick="saveDoc('${doc._id}')">Save</button>
+        <button class="secondary" onclick="showHistory('${doc._id}')">History</button>
+      </td>
+    </tr>`).join('')}</tbody></table>
+  </section>` : '<section class="card empty">No documents found.</section>';
+
+  document.getElementById('box').innerHTML = filters + rows + '<div id="historyModal"></div>';
+  makeTableSearchable('docSearch', '#docsTable');
+}
+
+function applyFilters() {
+  const studentVal = document.getElementById('studentFilter').value;
+  const statusVal = document.getElementById('statusFilter').value;
+  if (studentVal !== (currentStudentFilter || '')) {
+    currentStudentFilter = studentVal;
+    loadWithStudent(studentVal, statusVal);
+  } else {
+    render(studentVal, statusVal);
+  }
+}
+
+let currentStudentFilter = '';
+
+async function loadWithStudent(studentId, statusVal) {
+  try {
+    const endpoint = studentId ? 'student-documents?studentId=' + encodeURIComponent(studentId) : 'student-documents';
+    allDocs = await api(endpoint);
+    render(studentId, statusVal || '');
+  } catch (error) {
+    document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`;
+  }
+}
+
+async function saveDoc(id) {
+  const statusEl = document.getElementById('st-' + id);
+  const notesEl = document.getElementById('notes-' + id);
+  if (!statusEl) return;
+  try {
+    await api('student-documents/' + id, 'PUT', { status: statusEl.value, notes: notesEl ? notesEl.value : '' });
+    alert('Document updated successfully!');
+    await load();
+  } catch (error) {
+    alert(error.error || error.message || 'Update failed.');
+  }
+}
+
+async function showHistory(id) {
+  const modal = document.getElementById('historyModal');
+  try {
+    const history = await api('student-documents/history/' + id);
+    const entries = Array.isArray(history) ? history : (history.history || []);
+    if (!entries.length) {
+      modal.innerHTML = `<section class="card"><h3>Status History</h3><p class="muted">No history entries yet.</p><button class="secondary" onclick="document.getElementById('historyModal').innerHTML=''">Close</button></section>`;
+      return;
+    }
+    modal.innerHTML = `<section class="card"><h3>Status History</h3>
+      <table><thead><tr><th>Status</th><th>Notes</th><th>Updated By</th><th>Date</th></tr></thead><tbody>
+      ${entries.map(h => `<tr><td>${badge(h.status)}</td><td>${esc(h.notes || '')}</td><td>${esc(h.updatedBy || '')}</td><td>${new Date(h.at).toLocaleString()}</td></tr>`).join('')}
+      </tbody></table>
+      <button class="secondary" onclick="document.getElementById('historyModal').innerHTML=''">Close</button>
+    </section>`;
+  } catch (error) {
+    modal.innerHTML = `<section class="card"><p class="err">${esc(error.error || error.message)}</p><button class="secondary" onclick="document.getElementById('historyModal').innerHTML=''">Close</button></section>`;
+  }
+}
+
+load();
+</script></body></html>

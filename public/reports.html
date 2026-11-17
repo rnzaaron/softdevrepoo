@@ -3,22 +3,64 @@
 <script src="common.js"></script><script>
 // Report cards are created by grade finalization and scoped to each student/linked parent.
 init('Report cards');
+
 async function load() {
   try {
     const reports = await api('reports');
     if (!reports.length) { document.getElementById('box').innerHTML = '<section class="card empty">No finalized report cards are available yet.</section>'; return; }
     const staff = ['admin', 'adviser'].includes(user.role);
-    document.getElementById('box').innerHTML = reports.map(report => `<article class="card"><div class="toolbar"><div><h2>${esc(report.studentName)} · ${esc(report.period)}</h2><div class="muted">Student ID ${esc(report.studentId)} · ${esc(report.section)} · Generated ${new Date(report.generatedAt).toLocaleString()}</div></div>${badge(report.status)}</div><div style="overflow:auto"><table><thead><tr><th>Subject</th><th>Professor</th><th>Component grades</th><th>Final grade</th><th>Remarks</th></tr></thead><tbody>${report.grades.map(grade => `<tr><td>${esc(grade.subject)}</td><td>${esc(grade.teacherName)}</td><td>${Object.entries(grade.components || {}).map(([key, value]) => `${esc(key)} ${esc(value)}`).join(' · ')}</td><td>${esc(grade.final)}</td><td>${grade.final >= 75 ? 'Passed' : 'Needs review'}</td></tr>`).join('')}</tbody></table></div><p>Email status: ${badge(report.emailStatus || 'Not sent')}${staff ? ` <button onclick="sendReport('${report._id}')">Send report to parent</button>` : ''}</p></article>`).join('');
+    const searchBar = `<div class="toolbar"><input class="search-box" id="reportSearch" placeholder="🔍 Search report cards by student name or period..."></div>`;
+
+    const reportCardsHtml = reports.map(report => `
+      <article class="card">
+        <div class="toolbar">
+          <div>
+            <h2>${esc(report.studentName)} · ${esc(report.period)}</h2>
+            <div class="muted">Student ID: ${esc(report.studentId)} · ${esc(report.section)} · Generated ${new Date(report.generatedAt).toLocaleString()}</div>
+          </div>
+          ${badge(report.status)}
+        </div>
+        <div style="overflow:auto">
+          <table><thead><tr><th>Subject</th><th>Professor</th><th>Component grades</th><th>Final grade</th><th>Remarks</th></tr></thead><tbody>
+            ${report.grades.map(grade => `<tr>
+              <td><b>${esc(grade.subject)}</b></td>
+              <td>${esc(grade.teacherName)}</td>
+              <td>${Object.entries(grade.components || {}).map(([key, value]) => `${esc(key)}: ${esc(value)}`).join(' · ')}</td>
+              <td><b>${esc(grade.final)}</b></td>
+              <td>${grade.final >= 75 ? badge('Passed') : badge('Failed')}</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+        <p>Email status: ${badge(report.emailStatus || 'Not sent')}
+          ${staff ? ` <button onclick="sendReport('${report._id}')">Send copy to parent email</button>` : ''}
+        </p>
+      </article>`).join('');
+
+    let inboxHtml = '';
     if (staff) {
       const deliveries = await api('email-records');
-      document.getElementById('box').insertAdjacentHTML('beforeend', `<section class="card"><h2>Local demo email inbox</h2>${deliveries.length ? `<table><thead><tr><th>Recipient</th><th>Subject</th><th>Mode</th><th>Delivered</th></tr></thead><tbody>${deliveries.map(item => `<tr><td>${esc(item.recipient)}</td><td>${esc(item.subject)}</td><td>${esc(item.mode)}</td><td>${new Date(item.sentAt).toLocaleString()}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">No report emails have been recorded.</p>'}</section>`);
+      inboxHtml = `<section class="card"><h2>Local demo email inbox</h2>${deliveries.length ? `<table><thead><tr><th>Recipient</th><th>Subject</th><th>Mode</th><th>Delivered</th></tr></thead><tbody>${deliveries.map(item => `<tr><td>${esc(item.recipient)}</td><td>${esc(item.subject)}</td><td>${esc(item.mode)}</td><td>${new Date(item.sentAt).toLocaleString()}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">No report emails have been recorded.</p>'}</section>`;
+    }
+
+    document.getElementById('box').innerHTML = searchBar + `<div id="reportsContainer">${reportCardsHtml}</div>` + inboxHtml;
+
+    const searchInput = document.getElementById('reportSearch');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.toLowerCase().trim();
+        document.querySelectorAll('#reportsContainer article.card').forEach(card => {
+          card.style.display = (!q || card.textContent.toLowerCase().includes(q)) ? '' : 'none';
+        });
+      });
     }
   } catch (error) { document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
 }
+
 async function sendReport(id) {
   if (!confirm('Deliver this report to the linked parent in the local demo inbox?')) return;
   try { const result = await api(`reports/${id}/email`, 'POST', {}); alert(`Recorded local delivery to ${result.delivery.recipient}.`); await load(); }
-  catch (error) { alert(error.error || 'Could not record delivery.'); }
+  catch (error) { alert(error.error || error.message || 'Could not record delivery.'); }
 }
+
 load();
-</script><!-- Reports page: finalized student results and local demo email delivery records. --></body></html>
+</script></body></html>

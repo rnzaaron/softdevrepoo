@@ -14,10 +14,7 @@ const collections = [
   'report_cards',
   'notifications',
   'document_requests',
-  'config',
-  'student_documents',
-  'counters',
-  'teacher_assignments'
+  'config'
 ];
 
 async function initializeDatabase() {

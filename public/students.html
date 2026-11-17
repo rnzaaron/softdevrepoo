@@ -1,0 +1,55 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Students</title></head>
+<body><nav id="nav"></nav><main><h1 id="title"></h1><p class="subhead">Register students and update their records. The Student ID (SCCV-year-number) is generated automatically.</p><div id="box"></div></main>
+<script src="common.js"></script><script>
+// Admin-only page: registration form (dropdowns come from the database) + student table.
+init('Students');
+const $ = id => document.getElementById(id);
+const TEXT = [['name', 'Full name', 'text'], ['address', 'Complete address', 'text'], ['birthdate', 'Birthdate', 'date'],
+  ['guardianName', 'Guardian / parent name', 'text'], ['guardianMobile', 'Guardian mobile (09XXXXXXXXX)', 'tel'], ['contactNumber', 'Student contact number', 'tel']];
+let opts, students = [], editing = null, mySection = '';           // editing = Student ID being edited, null = registering a new student
+async function load() {
+  try {
+    if (user.role !== 'admin') throw { error: 'Only administrators can manage students.' };
+    [opts, students] = await Promise.all([api('options'), api('students')]);
+    const groups = [...new Set(opts.gradeLevels.map(g => g.classification))];
+    $('box').innerHTML = `<section class="card"><h2 id="formTitle">Register student</h2>
+      ${TEXT.map(([id, label, type]) => `<label class="field">${label}<input id="${id}" type="${type}"></label>`).join('')}
+      <label class="field">Grade level<select id="gradeLevel" onchange="levelChanged()"><option value="">Select…</option>${groups.map(c => `<optgroup label="${esc(c)}">${opts.gradeLevels.filter(g => g.classification === c).map(g => `<option>${esc(g.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+      <label class="field">Section<select id="section"><option value="">Select a grade level first</option></select></label>
+      <label class="field" id="strandBox" style="display:none">Strand (Senior High only)<select id="strand"><option value="">Select…</option>${opts.strands.map(s => `<option>${esc(s)}</option>`).join('')}</select></label>
+      <br><button onclick="save()">Save student</button> <button onclick="editing=null;load()">Clear</button><div id="msg" class="err" role="alert"></div></section>
+      <section class="card" style="overflow:auto"><div class="toolbar"><input class="search-box" id="stSearch" placeholder="🔍 Search students..."></div>
+      <table id="stTable"><thead><tr><th>Student ID</th><th>Name</th><th>Age</th><th>Birthdate</th><th>Address</th><th>Guardian</th><th>Guardian mobile</th><th>Contact</th><th>Grade</th><th>Section</th><th>Strand</th><th></th></tr></thead><tbody>
+      ${students.map(s => `<tr><td><b>${esc(s.studentId)}</b></td><td>${esc(s.name)}</td><td>${s.age ?? '—'}</td><td>${esc(s.birthdate || '—')}</td><td>${esc(s.address || '—')}</td><td>${esc(s.guardianName || '—')}</td><td>${esc(s.guardianMobile || '—')}</td><td>${esc(s.contactNumber || '—')}</td><td>${esc(s.gradeLevel || '—')}</td><td>${esc(s.section || '')}</td><td>${esc(s.strand || '—')}</td>
+      <td><button onclick="edit('${esc(s.studentId)}')">Edit</button><button onclick="remove('${s._id}','${esc(s.studentId)}')">Delete</button></td></tr>`).join('')}</tbody></table></section>`;
+    makeTableSearchable('stSearch', '#stTable');
+  } catch (e) { $('box').innerHTML = `<p class="err">${esc(e.error || e.message)}</p>`; }
+}
+// Section choices depend on the grade level; the strand box only appears for Senior High levels.
+function levelChanged() {
+  const lv = $('gradeLevel').value;
+  $('section').innerHTML = '<option value="">Select…</option>' + opts.sections.filter(s => s.gradeLevel === lv && s.active !== false).map(s => { const full = s.enrolled >= s.capacity && s.name !== mySection; return `<option value="${esc(s.name)}" ${full ? 'disabled' : ''}>${esc(s.sectionName || s.name)} – ${s.enrolled}/${s.capacity}${full ? ' (FULL)' : ''}${s.strand ? ' · ' + esc(s.strand) : ''}</option>`; }).join('');
+  const shs = opts.shsLevels.includes(lv);
+  $('strandBox').style.display = shs ? '' : 'none';
+  if (!shs) $('strand').value = '';
+}
+async function save() {
+  const body = Object.fromEntries([...TEXT.map(f => f[0]), 'gradeLevel', 'section', 'strand'].map(k => [k, $(k).value.trim()]));
+  try {
+    const r = editing ? await api('students/' + encodeURIComponent(editing), 'PUT', body) : await api('students', 'POST', body);
+    alert(editing ? 'Student updated.' : `Student registered.\nStudent ID: ${r.studentId}`);
+    editing = null; mySection = ''; await load();
+  } catch (e) { $('msg').textContent = e.error || 'Could not save the student.'; }
+}
+function edit(id) {
+  const s = students.find(x => x.studentId === id); editing = id;
+  TEXT.forEach(([k]) => $(k).value = s[k] || '');
+  mySection = s.section || ''; $('gradeLevel').value = s.gradeLevel || ''; levelChanged(); $('section').value = s.section || ''; $('strand').value = s.strand || '';
+  $('formTitle').textContent = 'Edit student ' + id; scrollTo(0, 0);
+}
+async function remove(_id, id) {
+  if (!confirm(`Delete student ${id} and their document checklist?`)) return;
+  try { await api('manage/students/' + _id, 'DELETE'); await load(); } catch (e) { alert(e.error || 'Could not delete.'); }
+}
+load();
+</script></body></html>

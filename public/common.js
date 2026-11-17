@@ -25,13 +25,13 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp
 const badge = (s) => {
   const str = String(s ?? '');
   let style = '';
-  if (['Passed', 'Approved', 'Finalized', 'Ready', 'Delivered to local demo inbox'].includes(str)) {
+  if (['Passed', 'Approved', 'Finalized', 'Ready', 'Ready for Claiming', 'Released', 'Delivered to local demo inbox'].includes(str)) {
     style = 'background:#d4edda;color:#155724;border:1px solid #c3e6cb;';
   } else if (['Failed', 'Rejected', 'Absent', 'For Correction'].includes(str)) {
     style = 'background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;';
   } else if (['Pending Review', 'Processing', 'Pending', 'Resubmitted'].includes(str)) {
     style = 'background:#fff3cd;color:#856404;border:1px solid #ffeeba;';
-  } else if (str === 'Substitute assigned') {
+  } else if (['Substitute assigned', 'Submitted'].includes(str)) {
     style = 'background:#cce5ff;color:#004085;border:1px solid #b8daff;';
   }
   return `<span class="badge" style="${style}">${esc(str)}</span>`;
@@ -45,7 +45,8 @@ function init(title) {
   const links = [['dashboard.html', 'Dashboard'], ['grades.html', 'Grades'], ['schedule.html', 'Class schedule'], ['announcements.html', 'Announcements']];
   if (['admin', 'adviser', 'student', 'parent'].includes(user.role)) links.push(['reports.html', 'Report cards']);
   if (['admin', 'adviser', 'student', 'parent'].includes(user.role)) links.push(['requests.html', 'Document requests']);
-  if (user.role === 'admin') links.push(['admin.html', 'Administration']);
+  if (['admin', 'adviser', 'student', 'parent'].includes(user.role)) links.push(['documents.html', 'Document tracking']);
+  if (user.role === 'admin') links.push(['levels.html', 'Grade levels & sections'], ['students.html', 'Students'], ['admin.html', 'Administration']);
   document.getElementById('nav').innerHTML = `<div class="brand"><img src="school-logo.webp" alt=""><strong>St. Catherine College of Valenzuela City</strong></div><div style="padding:8px 10px 12px"><b>${esc(user.name)}</b><br><small>${esc(user.role)}</small></div>` +
     links.map(([href, label]) => `<a href="${href}"${location.pathname.endsWith(href) ? ' class="active"' : ''}>${label}</a>`).join('') + '<a class="logout" href="#" onclick="logout();return false">Sign out</a>';
   document.getElementById('title').textContent = title;

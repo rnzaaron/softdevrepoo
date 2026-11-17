@@ -3,6 +3,7 @@
 <script src="common.js"></script><script>
 // Students and parents only receive their own requests; adviser/admin accounts manage the queue.
 init('Document requests');
+const DOC_STATUSES = ['Pending', 'Submitted', 'Processing', 'Ready for Claiming', 'Released', 'Rejected'];
 
 async function load() {
   try {
@@ -33,7 +34,7 @@ async function load() {
 
     const searchBar = requests.length ? `<div class="toolbar"><input class="search-box" id="requestSearch" placeholder="🔍 Search document requests..."></div>` : '';
 
-    const rows = requests.length ? `<section class="card" style="overflow:auto">${searchBar}<table id="requestsTable"><thead><tr><th>Document</th><th>Requested by</th><th>Student ID</th><th>Requested date</th><th>Status</th>${canRequest ? '' : '<th>Update status</th>'}</tr></thead><tbody>${requests.map(item => `<tr><td><b>${esc(item.kind)}</b></td><td>${esc(item.userName)}</td><td>${esc(item.studentId)}</td><td>${new Date(item.createdAt).toLocaleString()}</td><td>${badge(item.status)}</td>${canRequest ? '' : `<td><select id="status-${item._id}"><option ${item.status === 'Pending' ? 'selected' : ''}>Pending</option><option ${item.status === 'Processing' ? 'selected' : ''}>Processing</option><option ${item.status === 'Ready' ? 'selected' : ''}>Ready</option><option ${item.status === 'Rejected' ? 'selected' : ''}>Rejected</option></select><button onclick="updateRequest('${item._id}')">Save</button></td>`}</tr>`).join('')}</tbody></table></section>` : '<section class="card empty">No document requests found.</section>';
+    const rows = requests.length ? `<section class="card" style="overflow:auto">${searchBar}<table id="requestsTable"><thead><tr><th>Document</th><th>Requested by</th><th>Student ID</th><th>Requested date</th><th>Status</th>${user.role !== 'admin' ? '' : '<th>Update status</th>'}</tr></thead><tbody>${requests.map(item => `<tr><td><b>${esc(item.kind)}</b></td><td>${esc(item.userName)}</td><td>${esc(item.studentId)}</td><td>${new Date(item.createdAt).toLocaleString()}</td><td>${badge(item.status)}</td>${user.role !== 'admin' ? '' : `<td><select id="status-${item._id}">${DOC_STATUSES.map(s => `<option ${item.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select><button onclick="updateRequest('${item._id}')">Save</button></td>`}</tr>`).join('')}</tbody></table></section>` : '<section class="card empty">No document requests found.</section>';
 
     document.getElementById('box').innerHTML = form + rows;
     makeTableSearchable('requestSearch', '#requestsTable');

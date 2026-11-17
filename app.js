@@ -85,6 +85,7 @@ app.post('/api/logout', auth(), (req, res) => {
 
 app.get('/api/options', auth(), route(async (req, res) => {
   const [sections, subjects, teachers, rooms, students] = await Promise.all([
+<<<<<<< HEAD
     collection('sections').find({}, { projection: { name: 1, gradeLevel: 1, adviser: 1, active: 1, sectionName: 1, capacity: 1, strand: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
     collection('subjects').find({}, { projection: { name: 1, code: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
     collection('teachers').find({}, { projection: { name: 1, email: 1, subjects: 1, gradeLevel: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
@@ -95,6 +96,15 @@ app.get('/api/options', auth(), route(async (req, res) => {
   const gradeLevels = await collection('grade_levels').find({ active: { $ne: false } }).sort({ order: 1 }).project({ name: 1, classification: 1, _id: 0 }).toArray();
   res.json({ sections: sections.map(s => ({ ...s, capacity: s.capacity || 40, enrolled: counts[s.name] || 0 })), gradeLevels, subjects, teachers, rooms, shsLevels: cfg.shsLevels || [], strands: cfg.strands || [],
     students: ['admin', 'adviser', 'teacher'].includes(req.user.role) ? students : [] });   // students/parents must not see everyone
+=======
+    collection('sections').find({}, { projection: { name: 1, gradeLevel: 1, adviser: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('subjects').find({}, { projection: { name: 1, code: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('teachers').find({}, { projection: { name: 1, email: 1, subjects: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('rooms').find({}, { projection: { name: 1, capacity: 1, _id: 0 } }).sort({ name: 1 }).toArray(),
+    collection('students').find({}, { projection: { studentId: 1, name: 1, section: 1, email: 1, _id: 0 } }).sort({ name: 1 }).toArray()
+  ]);
+  res.json({ sections, subjects, teachers, rooms, students });
+>>>>>>> 7e37468c29cfbf13b3bd57a80060ea589ea86e56
 }));
 
 app.get('/api/stats', auth(), route(async (req, res) => {

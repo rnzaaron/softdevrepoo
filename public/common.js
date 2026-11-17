@@ -25,13 +25,21 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp
 const badge = (s) => {
   const str = String(s ?? '');
   let style = '';
+<<<<<<< HEAD
   if (['Passed', 'Approved', 'Finalized', 'Ready', 'Ready for Claiming', 'Released', 'Delivered to local demo inbox'].includes(str)) {
+=======
+  if (['Passed', 'Approved', 'Finalized', 'Ready', 'Delivered to local demo inbox'].includes(str)) {
+>>>>>>> 7e37468c29cfbf13b3bd57a80060ea589ea86e56
     style = 'background:#d4edda;color:#155724;border:1px solid #c3e6cb;';
   } else if (['Failed', 'Rejected', 'Absent', 'For Correction'].includes(str)) {
     style = 'background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;';
   } else if (['Pending Review', 'Processing', 'Pending', 'Resubmitted'].includes(str)) {
     style = 'background:#fff3cd;color:#856404;border:1px solid #ffeeba;';
+<<<<<<< HEAD
   } else if (['Substitute assigned', 'Submitted'].includes(str)) {
+=======
+  } else if (str === 'Substitute assigned') {
+>>>>>>> 7e37468c29cfbf13b3bd57a80060ea589ea86e56
     style = 'background:#cce5ff;color:#004085;border:1px solid #b8daff;';
   }
   return `<span class="badge" style="${style}">${esc(str)}</span>`;

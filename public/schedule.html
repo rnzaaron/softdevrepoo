@@ -22,14 +22,16 @@ async function load() {
 
     const controls = admin ? `<section class="card"><div class="toolbar"><h2>Schedule planner</h2><button onclick="generate()">Generate from assignments</button></div><p class="muted">Generation replaces the current timetable and avoids teacher, room, and section overlaps.</p>
       <h3>Add a class manually</h3>
-      <div class="field"><label>Subject</label><select id="subject">${options.subjects.length ? options.subjects.map(s => `<option value="${esc(s.name)}">${esc(s.name)}${s.code ? ` (${esc(s.code)})` : ''}</option>`).join('') : '<option value="">No subjects found</option>'}</select></div>
-      <div class="field"><label>Teacher</label><select id="teacherEmail">${options.teachers.length ? options.teachers.map(t => `<option value="${esc(t.email)}">${esc(t.name)} · ${esc(t.email)}</option>`).join('') : '<option value="">No teachers found</option>'}</select></div>
-      <div class="field"><label>Section</label><select id="section">${options.sections.length ? options.sections.map(sec => `<option value="${esc(sec.name)}">${esc(sec.name)}</option>`).join('') : '<option value="">No sections found</option>'}</select></div>
-      <div class="field"><label>Room</label><select id="room">${options.rooms.length ? options.rooms.map(r => `<option value="${esc(r.name)}">${esc(r.name)}${r.capacity ? ` (Cap: ${r.capacity})` : ''}</option>`).join('') : '<option value="">No rooms found</option>'}</select></div>
-      <div class="field"><label>Day</label><select id="day"><option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option><option>Sat</option></select></div>
-      <div class="field"><label>Start</label><input id="start" type="time" value="08:00" required></div>
-      <div class="field"><label>End</label><input id="end" type="time" value="09:00" required></div>
-      <br><button onclick="addClass()">Add class</button><div id="error" class="err" role="alert"></div></section>` : '';
+      <form onsubmit="addClass(event)">
+        <div class="field"><label for="subject">Subject</label><select id="subject" required>${options.subjects.length ? options.subjects.map(s => `<option value="${esc(s.name)}">${esc(s.name)}${s.code ? ` (${esc(s.code)})` : ''}</option>`).join('') : '<option value="" selected disabled>No subjects found</option>'}</select></div>
+        <div class="field"><label for="teacherEmail">Teacher</label><select id="teacherEmail" required>${options.teachers.length ? options.teachers.map(t => `<option value="${esc(t.email)}">${esc(t.name)} · ${esc(t.email)}</option>`).join('') : '<option value="" selected disabled>No teachers found</option>'}</select></div>
+        <div class="field"><label for="section">Section</label><select id="section" required>${options.sections.length ? options.sections.map(sec => `<option value="${esc(sec.name)}">${esc(sec.name)}</option>`).join('') : '<option value="" selected disabled>No sections found</option>'}</select></div>
+        <div class="field"><label for="room">Room</label><select id="room" required>${options.rooms.length ? options.rooms.map(r => `<option value="${esc(r.name)}">${esc(r.name)}${r.capacity ? ` (Cap: ${r.capacity})` : ''}</option>`).join('') : '<option value="" selected disabled>No rooms found</option>'}</select></div>
+        <div class="field"><label for="day">Day</label><select id="day" required><option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option><option>Sat</option></select></div>
+        <div class="field"><label for="start">Start</label><input id="start" type="time" value="08:00" required></div>
+        <div class="field"><label for="end">End</label><input id="end" type="time" value="09:00" required></div>
+        <br><button type="submit">Add class</button><div id="error" class="err" role="alert"></div>
+      </form></section>` : '';
 
     const filterBar = schedules.length ? `<div class="toolbar"><input class="search-box" id="scheduleSearch" placeholder="🔍 Search timetable (subject, teacher, room, day...)"></div>` : '';
 
@@ -40,7 +42,8 @@ async function load() {
   } catch (error) { document.getElementById('box').innerHTML = `<p class="err">${esc(error.error || error.message)}</p>`; }
 }
 
-async function addClass() {
+async function addClass(event) {
+  event.preventDefault();
   const fields = Object.fromEntries(['subject', 'teacherEmail', 'section', 'room', 'day', 'start', 'end'].map(key => [key, (document.getElementById(key)?.value || '').trim()]));
   try { await api('schedules', 'POST', fields); await load(); }
   catch (error) { document.getElementById('error').textContent = error.error || 'Could not add class.'; }

@@ -321,9 +321,23 @@ async function scheduleConflict(candidate, excludeId) {
     (item.section === candidate.section || item.room === candidate.room || [item.teacherEmail, item.substituteEmail].includes(candidate.teacherEmail)));
 }
 app.post('/api/schedules', auth(['admin']), route(async (req, res) => {
-  const row = { ...req.body, dayIndex: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(req.body.day) };
-  if (!row.subject || !row.section || !row.teacherEmail || !row.room || !row.day || !row.start || !row.end || row.start >= row.end)
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const { subject, teacherEmail, section, room, day, start, end } = body;
+  const row = {
+    subject: typeof subject === 'string' ? subject.trim() : '',
+    teacherEmail: typeof teacherEmail === 'string' ? teacherEmail.trim() : '',
+    section: typeof section === 'string' ? section.trim() : '',
+    room: typeof room === 'string' ? room.trim() : '',
+    day,
+    start,
+    end
+  };
+  const validTime = value => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+  if (!row.subject || !row.section || !row.teacherEmail || !row.room || !days.includes(row.day) ||
+      !validTime(row.start) || !validTime(row.end) || row.start >= row.end)
     return sendError(res, 'Complete every schedule field and use a valid time range.');
+  row.dayIndex = days.indexOf(row.day);
   const conflict = await scheduleConflict(row);
   if (conflict) return res.status(409).json({ error: `Conflict: ${conflict.subject} in ${conflict.section}, ${conflict.room}, ${conflict.start}-${conflict.end}.` });
   row.substituteEmail = '';
